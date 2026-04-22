@@ -53,6 +53,11 @@ client:connect {
     ssl_client_cert = nil,
     ssl_client_priv_key = nil,
 
+    -- Custom trusted CA store (cdata `X509_STORE*`), passed to
+    -- `tcpsock:settrustedstore`. Requires a cosocket build with
+    -- `settrustedstore` support.
+    ssl_trusted_store = nil,
+
     proxy_opts,             -- proxy opts, defaults to global proxy options
 }
 ]]
@@ -81,6 +86,7 @@ local function connect(self, options)
     -- ssl settings
     local ssl, ssl_reused_session, ssl_server_name
     local ssl_verify, ssl_send_status_req, ssl_client_cert, ssl_client_priv_key
+    local ssl_trusted_store
     if request_scheme == "https" then
         ssl = true
         ssl_reused_session = options.ssl_reused_session
@@ -92,6 +98,7 @@ local function connect(self, options)
         end
         ssl_client_cert = options.ssl_client_cert
         ssl_client_priv_key = options.ssl_client_priv_key
+        ssl_trusted_store = options.ssl_trusted_store
     end
 
     -- proxy related settings
@@ -233,6 +240,27 @@ local function connect(self, options)
         cert_hash = to_hex(cert_hash) -- convert to hex so that it's printable
     end
 
+    -- Validate ssl_trusted_store early to avoid wasted network I/O
+    if ssl and ssl_trusted_store then
+        if type(ssl_trusted_store) ~= "cdata" then
+            return nil, "bad ssl_trusted_store: cdata expected, got " .. type(ssl_trusted_store)
+        end
+
+        if type(sock.settrustedstore) ~= "function" then
+            return nil, "cannot use ssl_trusted_store without settrustedstore support"
+        end
+    end
+
+    -- Build a hash-based identifier for the trusted store to use in pool
+    -- names. ngx.md5 produces a printable 128-bit hex digest of the cdata
+    -- pointer string so the raw address is not leaked in debug logs; while
+    -- collisions are very unlikely in practice for this purpose, they are not
+    -- impossible.
+    local ssl_trusted_store_id
+    if ssl_trusted_store then
+        ssl_trusted_store_id = ngx.md5(tostring(ssl_trusted_store))
+    end
+
     -- construct a poolname unique within proxy and ssl info
     if not poolname then
         poolname = (request_scheme or "")
@@ -244,6 +272,7 @@ local function connect(self, options)
                    .. ":" .. (proxy_uri or "")
                    .. ":" .. (request_scheme == "https" and proxy_authorization or "")
                    .. ":" .. (cert_hash or "")
+                   .. ":" .. tostring(ssl_trusted_store_id or "")
         -- in the above we only add the 'proxy_authorization' as part of the poolname
         -- when the request is https. Because in that case the CONNECT request (which
         -- carries the authorization header) is part of the connect procedure, whereas
@@ -310,13 +339,24 @@ local function connect(self, options)
         -- Experimental mTLS support
         if ssl_client_cert and ssl_client_priv_key then
           if type(sock.setclientcert) ~= "function" then
+              self:close()
               return nil, "cannot use SSL client cert and key without mTLS support"
 
           else
               ok, err = sock:setclientcert(ssl_client_cert, ssl_client_priv_key)
               if not ok then
+                  self:close()
                   return nil, "could not set client certificate: " .. err
               end
+          end
+        end
+
+        -- Custom trusted CA store support
+        if ssl_trusted_store then
+          ok, err = sock:settrustedstore(ssl_trusted_store)
+          if not ok then
+              self:close()
+              return nil, "could not set trusted store: " .. err
           end
         end
 
