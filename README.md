@@ -458,6 +458,20 @@ Sets the current response based on the given `res`. Ensures that hop-by-hop head
 
 James Hurst <james@pintsized.co.uk>, with contributions from @hamishforbes, @Tieske, @bungle et al.
 
+# History
+
+Versioning is strictly based on [Semantic Versioning](https://semver.org/)
+
+### Releasing new versions:
+
+* update changelog below (PR's should be merged including a changelog entry)
+* based on changelog determine new SemVer version
+* create a new rockspec
+* commit as "release x.x.x" (do not include rockspec revision)
+* tag the commit with "x.x.x" (do not include rockspec revision)
+* push commit and tag
+* upload rock to luarocks: `luarocks upload rockspecs/[name] --api-key=abc`
+
 # Licence
 
 This module is licensed under the 2-clause BSD license.

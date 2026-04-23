@@ -1,14 +1,14 @@
-package = "lua-resty-http"
+package = "kong-lua-resty-http"
 version = "0.17.2-0"
 source = {
-    url = "git://github.com/ledgetech/lua-resty-http",
+    url = "git@github.com:Kong/lua-resty-http.git",
     tag = "v0.17.2"
 }
 description = {
     summary = "Lua HTTP client cosocket driver for OpenResty / ngx_lua.",
-    homepage = "https://github.com/ledgetech/lua-resty-http",
+    homepage = "https://github.com/Kong/lua-resty-http",
     license = "2-clause BSD",
-    maintainer = "James Hurst <james@pintsized.co.uk>"
+    maintainer = "Kong Inc."
 }
 dependencies = {
     "lua >= 5.1"
