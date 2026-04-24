@@ -473,6 +473,11 @@ Versioning is strictly based on [Semantic Versioning](https://semver.org/)
 * push commit and tag
 * upload rock to luarocks: `luarocks upload rockspecs/[name] --api-key=abc`
 
+### 0.18.0 (24-Apr-2026)
+
+* feat(ssl): add ssl_trusted_store option to connect for custom CA store
+ [#1](https://github.com/Kong/lua-resty-http/pull/1)
+
 # Licence
 
 This module is licensed under the 2-clause BSD license.
