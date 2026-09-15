@@ -518,3 +518,201 @@ GET /lua
 --- no_error_log
 [error]
 [warn]
+
+
+
+=== TEST 11: no_proxy match bypasses the proxy and sends an origin-form request
+--- http_config
+    lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
+    error_log logs/error.log debug;
+    resolver 8.8.8.8;
+    server {
+        listen *:8080;
+
+        location / {
+            content_by_lua_block {
+                ngx.print(ngx.req.raw_header())
+            }
+        }
+    }
+--- config
+    location /lua {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+            httpc:set_proxy_options({
+                http_proxy = "http://127.0.0.1:12345",
+                https_proxy = "http://127.0.0.1:12345",
+                no_proxy = "127.0.0.1"
+            })
+
+            -- the target host matches no_proxy, so the request should be sent
+            -- directly to the target server in origin-form
+            local res, err = httpc:request_uri("http://127.0.0.1:8080/target?a=1&b=2")
+
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.status = res.status
+            ngx.say(res.body)
+        }
+    }
+--- request
+GET /lua
+--- response_body_like
+^GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
+--- no_error_log
+[error]
+[warn]
+
+
+
+=== TEST 12: no_proxy set to "*" bypasses the proxy and sends an origin-form request
+--- http_config
+    lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
+    error_log logs/error.log debug;
+    resolver 8.8.8.8;
+    server {
+        listen *:8080;
+
+        location / {
+            content_by_lua_block {
+                ngx.print(ngx.req.raw_header())
+            }
+        }
+    }
+--- config
+    location /lua {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+            httpc:set_proxy_options({
+                http_proxy = "http://127.0.0.1:12345",
+                https_proxy = "http://127.0.0.1:12345",
+                no_proxy = "*"
+            })
+
+            -- all hosts are excluded, so the request should be sent directly
+            -- to the target server in origin-form
+            local res, err = httpc:request_uri("http://127.0.0.1:8080/target?a=1&b=2")
+
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.status = res.status
+            ngx.say(res.body)
+        }
+    }
+--- request
+GET /lua
+--- response_body_like
+^GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
+--- no_error_log
+[error]
+[warn]
+
+
+
+=== TEST 13: non-matching no_proxy still sends an absolute-form request through the proxy
+--- http_config
+    lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
+    error_log logs/error.log debug;
+    resolver 8.8.8.8;
+    server {
+        listen *:8080;
+
+        location / {
+            content_by_lua_block {
+                ngx.print(ngx.req.raw_header())
+            }
+        }
+    }
+--- config
+    location /lua {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+            httpc:set_proxy_options({
+                http_proxy = "http://127.0.0.1:8080",
+                https_proxy = "http://127.0.0.1:8080",
+                no_proxy = "example.com"
+            })
+
+            -- the target host does not match no_proxy, so the request should
+            -- still be sent through the proxy in absolute-form
+            local res, err = httpc:request_uri("http://127.0.0.1:1234/target?a=1&b=2")
+
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.status = res.status
+            ngx.say(res.body)
+        }
+    }
+--- request
+GET /lua
+--- response_body_like
+^GET http://127.0.0.1:1234/target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:1234.+
+--- no_error_log
+[error]
+[warn]
+
+
+
+=== TEST 14: reusing a client between proxied and no_proxy requests sends the correct request forms
+--- http_config
+    lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
+    error_log logs/error.log debug;
+    resolver 8.8.8.8;
+    server {
+        listen *:8080;
+
+        location / {
+            content_by_lua_block {
+                ngx.print(ngx.req.raw_header())
+            }
+        }
+    }
+--- config
+    location /lua {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+
+            -- first request goes through the proxy in absolute-form
+            httpc:set_proxy_options({
+                http_proxy = "http://127.0.0.1:8080",
+                https_proxy = "http://127.0.0.1:8080"
+            })
+            local res, err = httpc:request_uri("http://127.0.0.1:1234/target?a=1")
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.say(res.body)
+
+            -- second request on the same client is excluded by no_proxy and
+            -- must be sent directly in origin-form
+            httpc:set_proxy_options({
+                http_proxy = "http://127.0.0.1:12345",
+                https_proxy = "http://127.0.0.1:12345",
+                no_proxy = "127.0.0.1"
+            })
+            res, err = httpc:request_uri("http://127.0.0.1:8080/target?a=2")
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.say(res.body)
+        }
+    }
+--- request
+GET /lua
+--- response_body_like
+(?s)^GET http://127.0.0.1:1234/target\?a=1 HTTP/.+\r\nHost: 127.0.0.1:1234.+GET /target\?a=2 HTTP/.+\r\nHost: 127.0.0.1:8080\r?\n?
+--- no_error_log
+[error]
+[warn]

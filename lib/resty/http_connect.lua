@@ -103,6 +103,17 @@ local function connect(self, options)
 
     -- proxy related settings
     local proxy, proxy_uri, proxy_authorization, proxy_host, proxy_port, path_prefix
+
+    -- Clear all proxy state, including the absolute-form path prefix, so that
+    -- a subsequent request on this connection is not sent in proxy form.
+    local function disable_proxy()
+        -- It is intentional to define here so we can clear the captured vars
+        proxy = nil
+        proxy_uri = nil
+        proxy_authorization = nil
+        path_prefix = nil
+    end
+
     proxy = options.proxy_opts or self.proxy_opts
 
     if proxy then
@@ -124,9 +135,7 @@ local function connect(self, options)
             path_prefix = "http://" .. request_host .. (request_port == 80 and "" or (":" .. request_port))
         end
         if not proxy_uri then
-            proxy = nil
-            proxy_authorization = nil
-            path_prefix = nil
+            disable_proxy()
         end
     end
 
@@ -135,7 +144,7 @@ local function connect(self, options)
         -- from lua-http library (https://github.com/daurnimator/lua-http)
         if proxy.no_proxy == "*" then
             -- all hosts are excluded
-            proxy = nil
+            disable_proxy()
 
         else
             local host = request_host
@@ -156,9 +165,7 @@ local function connect(self, options)
             -- a match or until there's only the TLD left
             repeat
                 if no_proxy_set[host] then
-                    proxy = nil
-                    proxy_uri = nil
-                    proxy_authorization = nil
+                    disable_proxy()
                     break
                 end
 
