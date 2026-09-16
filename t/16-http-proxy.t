@@ -5,6 +5,7 @@ my $pwd = cwd();
 
 $ENV{TEST_NGINX_RESOLVER} = '8.8.8.8';
 $ENV{TEST_NGINX_PWD} ||= $pwd;
+$ENV{TEST_NGINX_CERT_DIR} ||= "$pwd/t";
 $ENV{TEST_COVERAGE} ||= 0;
 
 our $HttpConfig = qq{
@@ -525,7 +526,6 @@ GET /lua
 --- http_config
     lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
     error_log logs/error.log debug;
-    resolver 8.8.8.8;
     server {
         listen *:8080;
 
@@ -543,11 +543,13 @@ GET /lua
             httpc:set_proxy_options({
                 http_proxy = "http://127.0.0.1:12345",
                 https_proxy = "http://127.0.0.1:12345",
+                http_proxy_authorization = "Basic ZGVtbzp0ZXN0",
                 no_proxy = "127.0.0.1"
             })
 
             -- the target host matches no_proxy, so the request should be sent
-            -- directly to the target server in origin-form
+            -- directly to the target server in origin-form, without the proxy
+            -- authorization header
             local res, err = httpc:request_uri("http://127.0.0.1:8080/target?a=1&b=2")
 
             if not res then
@@ -561,7 +563,7 @@ GET /lua
 --- request
 GET /lua
 --- response_body_like
-^GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
+^(?!.*Proxy-Authorization)GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
 --- no_error_log
 [error]
 [warn]
@@ -572,7 +574,6 @@ GET /lua
 --- http_config
     lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
     error_log logs/error.log debug;
-    resolver 8.8.8.8;
     server {
         listen *:8080;
 
@@ -590,11 +591,13 @@ GET /lua
             httpc:set_proxy_options({
                 http_proxy = "http://127.0.0.1:12345",
                 https_proxy = "http://127.0.0.1:12345",
+                http_proxy_authorization = "Basic ZGVtbzp0ZXN0",
                 no_proxy = "*"
             })
 
             -- all hosts are excluded, so the request should be sent directly
-            -- to the target server in origin-form
+            -- to the target server in origin-form, without the proxy
+            -- authorization header
             local res, err = httpc:request_uri("http://127.0.0.1:8080/target?a=1&b=2")
 
             if not res then
@@ -608,7 +611,7 @@ GET /lua
 --- request
 GET /lua
 --- response_body_like
-^GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
+^(?!.*Proxy-Authorization)GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:8080.+
 --- no_error_log
 [error]
 [warn]
@@ -619,7 +622,6 @@ GET /lua
 --- http_config
     lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
     error_log logs/error.log debug;
-    resolver 8.8.8.8;
     server {
         listen *:8080;
 
@@ -666,7 +668,6 @@ GET /lua
 --- http_config
     lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
     error_log logs/error.log debug;
-    resolver 8.8.8.8;
     server {
         listen *:8080;
 
@@ -713,6 +714,57 @@ GET /lua
 GET /lua
 --- response_body_like
 (?s)^GET http://127.0.0.1:1234/target\?a=1 HTTP/.+\r\nHost: 127.0.0.1:1234.+GET /target\?a=2 HTTP/.+\r\nHost: 127.0.0.1:8080\r?\n?
+--- no_error_log
+[error]
+[warn]
+
+
+
+=== TEST 15: no_proxy set to "*" bypasses https_proxy and sends a direct TLS request
+--- http_config
+    lua_package_path "$TEST_NGINX_PWD/lib/?.lua;;";
+    error_log logs/error.log debug;
+    server {
+        listen *:18443 ssl;
+        ssl_certificate $TEST_NGINX_CERT_DIR/cert/test.crt;
+        ssl_certificate_key $TEST_NGINX_CERT_DIR/cert/test.key;
+
+        location / {
+            content_by_lua_block {
+                ngx.print(ngx.req.raw_header())
+            }
+        }
+    }
+--- config
+    location /lua {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+            httpc:set_proxy_options({
+                https_proxy = "http://127.0.0.1:12345",
+                https_proxy_authorization = "Basic ZGVtbzp0ZXN0",
+                no_proxy = "*"
+            })
+
+            -- all hosts are excluded, so the request should be sent directly
+            -- to the target server over TLS, without a CONNECT tunnel or the
+            -- proxy authorization header
+            local res, err = httpc:request_uri("https://127.0.0.1:18443/target?a=1&b=2", {
+                ssl_verify = false
+            })
+
+            if not res then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+            ngx.status = res.status
+            ngx.say(res.body)
+        }
+    }
+--- request
+GET /lua
+--- response_body_like
+^(?!.*Proxy-Authorization)GET /target\?a=1&b=2 HTTP/.+\r\nHost: 127.0.0.1:18443.+
 --- no_error_log
 [error]
 [warn]

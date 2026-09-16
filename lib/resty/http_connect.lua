@@ -61,6 +61,14 @@ client:connect {
     proxy_opts,             -- proxy opts, defaults to global proxy options
 }
 ]]
+-- Clear all proxy state, so that a request which bypasses the proxy is
+-- neither routed through the proxy nor authenticated against it.
+local function disable_proxy(proxy_state)
+    proxy_state.proxy = nil
+    proxy_state.proxy_uri = nil
+    proxy_state.proxy_authorization = nil
+end
+
 local function connect(self, options)
     local sock = self.sock
     if not sock then
@@ -102,56 +110,34 @@ local function connect(self, options)
     end
 
     -- proxy related settings
-    local proxy, proxy_uri, proxy_authorization, proxy_host, proxy_port, path_prefix
+    local proxy_state = { proxy = options.proxy_opts or self.proxy_opts }
 
-    -- Clear all proxy state, including the absolute-form path prefix, so that
-    -- a subsequent request on this connection is not sent in proxy form.
-    local function disable_proxy()
-        -- It is intentional to define here so we can clear the captured vars
-        proxy = nil
-        proxy_uri = nil
-        proxy_authorization = nil
-        path_prefix = nil
-    end
-
-    proxy = options.proxy_opts or self.proxy_opts
-
-    if proxy then
+    if proxy_state.proxy then
         if request_scheme == "https" then
-            proxy_uri = proxy.https_proxy
-            proxy_authorization = proxy.https_proxy_authorization
+            proxy_state.proxy_uri = proxy_state.proxy.https_proxy
+            proxy_state.proxy_authorization = proxy_state.proxy.https_proxy_authorization
         else
-            proxy_uri = proxy.http_proxy
-            proxy_authorization = proxy.http_proxy_authorization
-            -- When a proxy is used, the target URI must be in absolute-form
-            -- (RFC 7230, Section 5.3.2.). That is, it must be an absolute URI
-            -- to the remote resource with the scheme, host and an optional port
-            -- in place.
-            --
-            -- Since _format_request() constructs the request line by concatenating
-            -- params.path and params.query together, we need to modify the path
-            -- to also include the scheme, host and port so that the final form
-            -- in conformant to RFC 7230.
-            path_prefix = "http://" .. request_host .. (request_port == 80 and "" or (":" .. request_port))
+            proxy_state.proxy_uri = proxy_state.proxy.http_proxy
+            proxy_state.proxy_authorization = proxy_state.proxy.http_proxy_authorization
         end
-        if not proxy_uri then
-            disable_proxy()
+        if not proxy_state.proxy_uri then
+            disable_proxy(proxy_state)
         end
     end
 
-    if proxy and proxy.no_proxy then
+    if proxy_state.proxy and proxy_state.proxy.no_proxy then
         -- Check if the no_proxy option matches this host. Implementation adapted
         -- from lua-http library (https://github.com/daurnimator/lua-http)
-        if proxy.no_proxy == "*" then
+        if proxy_state.proxy.no_proxy == "*" then
             -- all hosts are excluded
-            disable_proxy()
+            disable_proxy(proxy_state)
 
         else
             local host = request_host
             local no_proxy_set = {}
             -- wget allows domains in no_proxy list to be prefixed by "."
             -- e.g. no_proxy=.mit.edu
-            for host_suffix in ngx_re_gmatch(proxy.no_proxy, "\\.?([^,]+)") do
+            for host_suffix in ngx_re_gmatch(proxy_state.proxy.no_proxy, "\\.?([^,]+)") do
                 no_proxy_set[host_suffix[1]] = true
             end
 
@@ -165,7 +151,7 @@ local function connect(self, options)
             -- a match or until there's only the TLD left
             repeat
                 if no_proxy_set[host] then
-                    disable_proxy()
+                    disable_proxy(proxy_state)
                     break
                 end
 
@@ -176,9 +162,26 @@ local function connect(self, options)
         end
     end
 
-    if proxy then
+    -- When a proxy is used, the target URI must be in absolute-form
+    -- (RFC 7230, Section 5.3.2.). That is, it must be an absolute URI
+    -- to the remote resource with the scheme, host and an optional port
+    -- in place.
+    --
+    -- Since _format_request() constructs the request line by concatenating
+    -- params.path and params.query together, we need to modify the path
+    -- to also include the scheme, host and port so that the final form
+    -- in conformant to RFC 7230.
+    --
+    -- Only compute it once the proxy is confirmed to be used, so that
+    -- requests bypassing the proxy are sent in origin-form.
+    if proxy_state.proxy and request_scheme ~= "https" then
+        proxy_state.path_prefix = "http://" .. request_host ..
+                                  (request_port == 80 and "" or (":" .. request_port))
+    end
+
+    if proxy_state.proxy then
         local proxy_uri_t
-        proxy_uri_t, err = self:parse_uri(proxy_uri)
+        proxy_uri_t, err = self:parse_uri(proxy_state.proxy_uri)
         if not proxy_uri_t then
             return nil, "uri parse error: " .. err
         end
@@ -188,8 +191,8 @@ local function connect(self, options)
             return nil, "protocol " .. tostring(proxy_scheme) ..
                         " not supported for proxy connections"
         end
-        proxy_host = proxy_uri_t[2]
-        proxy_port = proxy_uri_t[3]
+        proxy_state.proxy_host = proxy_uri_t[2]
+        proxy_state.proxy_port = proxy_uri_t[3]
     end
 
     local cert_hash
@@ -276,8 +279,8 @@ local function connect(self, options)
                    .. ":" .. tostring(ssl)
                    .. ":" .. (ssl_server_name or "")
                    .. ":" .. tostring(ssl_verify)
-                   .. ":" .. (proxy_uri or "")
-                   .. ":" .. (request_scheme == "https" and proxy_authorization or "")
+                   .. ":" .. (proxy_state.proxy_uri or "")
+                   .. ":" .. (request_scheme == "https" and proxy_state.proxy_authorization or "")
                    .. ":" .. (cert_hash or "")
                    .. ":" .. tostring(ssl_trusted_store_id or "")
         -- in the above we only add the 'proxy_authorization' as part of the poolname
@@ -290,12 +293,12 @@ local function connect(self, options)
 
     -- do TCP level connection
     local tcp_opts = { pool = poolname, pool_size = pool_size, backlog = backlog }
-    if proxy then
+    if proxy_state.proxy then
         -- proxy based connection
-        ok, err = sock:connect(proxy_host, proxy_port, tcp_opts)
+        ok, err = sock:        connect(proxy_state.proxy_host, proxy_state.proxy_port, tcp_opts)
         if not ok then
-            return nil, "failed to connect to: " .. (proxy_host or "") ..
-                        ":" .. (proxy_port or "") ..
+            return nil, "failed to connect to: " .. (proxy_state.proxy_host or "") ..
+                        ":" .. (proxy_state.proxy_port or "") ..
                         ": " .. err
         end
 
@@ -311,7 +314,7 @@ local function connect(self, options)
                 path = destination,
                 headers = {
                     ["Host"] = destination,
-                    ["Proxy-Authorization"] = proxy_authorization,
+                    ["Proxy-Authorization"] = proxy_state.proxy_authorization,
                 }
             })
 
@@ -379,8 +382,8 @@ local function connect(self, options)
     self.keepalive = true
     self.ssl = ssl
     -- set only for http, https has already been handled
-    self.http_proxy_auth = request_scheme ~= "https" and proxy_authorization or nil
-    self.path_prefix = path_prefix
+    self.http_proxy_auth = request_scheme ~= "https" and proxy_state.proxy_authorization or nil
+    self.path_prefix = proxy_state.path_prefix
 
     return true, nil, ssl_session
 end
