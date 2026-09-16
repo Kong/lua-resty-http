@@ -295,7 +295,7 @@ local function connect(self, options)
     local tcp_opts = { pool = poolname, pool_size = pool_size, backlog = backlog }
     if proxy_state.proxy then
         -- proxy based connection
-        ok, err = sock:        connect(proxy_state.proxy_host, proxy_state.proxy_port, tcp_opts)
+        ok, err = sock:connect(proxy_state.proxy_host, proxy_state.proxy_port, tcp_opts)
         if not ok then
             return nil, "failed to connect to: " .. (proxy_state.proxy_host or "") ..
                         ":" .. (proxy_state.proxy_port or "") ..
