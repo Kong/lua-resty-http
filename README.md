@@ -478,6 +478,11 @@ Versioning is strictly based on [Semantic Versioning](https://semver.org/)
 * feat(ssl): add ssl_trusted_store option to connect for custom CA store
  [#1](https://github.com/Kong/lua-resty-http/pull/1)
 
+### 0.18.2 (17-Sep-2026)
+
+* fix: ensure mixing proxied/no_proxy requests are sent correctly
+ [#4](https://github.com/Kong/lua-resty-http/pull/4)
+
 # Licence
 
 This module is licensed under the 2-clause BSD license.
