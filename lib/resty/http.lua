@@ -10,6 +10,8 @@ local str_lower = string.lower
 local str_upper = string.upper
 local str_find = string.find
 local str_sub = string.sub
+local str_gsub = string.gsub
+local str_match = string.match
 local tbl_concat = table.concat
 local tbl_insert = table.insert
 local ngx_encode_args = ngx.encode_args
@@ -270,6 +272,21 @@ end
 
 function _M.parse_uri(_, uri, query_in_path)
     if query_in_path == nil then query_in_path = true end
+
+    do
+        local prefix, authority, suffix = str_match(uri, "^(.-//)([^/?#]*)(.*)$")
+        if authority and str_sub(authority, 1, 1) ~= "[" then
+            local last = str_find(authority, ":[^:]*$")
+            if last then
+                local host = str_sub(authority, 1, last - 1)
+                local port = str_sub(authority, last + 1)
+                local _, colons = str_gsub(host, ":", "")
+                if colons > 1 and str_find(port, "^%d+$") and str_find(host, "^[%x:.]+$") then
+                    uri = prefix .. "[" .. host .. "]:" .. port .. suffix
+                end
+            end
+        end
+    end
 
     local m, err = ngx_re_match(
         uri,
